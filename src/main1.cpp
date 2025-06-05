@@ -1,45 +1,79 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
 
-const int PIR_PIN = 14;      // PIR sensor pin
-const int LED_PIN = 2;       // Built-in LED pin
-const int BUZZER_PIN = 15;
-// Motion detection variables
-bool lastPirState = false;    // Previous PIR state
-bool currentPirState = false; // Current PIR state
-unsigned long lastDetectionTime = 0;  // Last detection timestamp
-const unsigned long COOLDOWN_PERIOD = 2000;  // Cooldown in milliseconds
+// === Identifiants Wi-Fi ===
+const char* ssid = "otmane";
+const char* password = "1234560*";
 
-void playAlertTone() {
-  // Play a short beep
-  tone(BUZZER_PIN, 2000, 200); // 2000Hz for 200ms
-  delay(200);
-  noTone(BUZZER_PIN);
+// === Telegram Bot ===
+String botToken = "your bot token";
+String chatID = "idchat";
+
+// === Broches ===
+const int pirPin = 15;   // PIR OUT → GPIO15
+const int ledPin = 2;    // LED → GPIO2 (LED interne de l'ESP32)
+
+// === Variables de détection ===
+bool motionDetected = false;
+unsigned long lastTrigger = 0;
+unsigned long cooldown = 10000; // 10 secondes de pause entre alertes
+
+// === Fonction d'envoi de message Telegram ===
+void sendTelegramMessage(const String& message) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
+    String payload = "chat_id=" + chatID + "&text=" + message;
+
+    http.begin(url);
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    int responseCode = http.POST(payload);
+    http.end();
+
+    if (responseCode == 200) {
+      Serial.println("[Telegram] Message envoyé avec succès.");
+    } else {
+      Serial.printf("[Telegram] Échec d'envoi. Code HTTP: %d\n", responseCode);
+    }
+  } else {
+    Serial.println("[WiFi] Non connecté.");
+  }
 }
 
 void setup() {
-  pinMode(PIR_PIN, INPUT);
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
   Serial.begin(115200);
-  Serial.println("PIR Motion Sensor with Buzzer initialized");
+  pinMode(pirPin, INPUT);
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, LOW);
+
+  // Connexion Wi-Fi
+  WiFi.begin(ssid, password);
+  Serial.print("[WiFi] Connexion en cours");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n[WiFi] Connecté avec succès !");
 }
 
 void loop() {
-  currentPirState = digitalRead(PIR_PIN);
-  unsigned long currentTime = millis();
-  
-  // Check for rising edge (motion starts) and cooldown period
-  if (currentPirState == HIGH && lastPirState == false) {
-    if (currentTime - lastDetectionTime >= COOLDOWN_PERIOD) {
-      digitalWrite(LED_PIN, HIGH);
-      playAlertTone();  // Activate buzzer
-      Serial.println("Motion detected!");
-      lastDetectionTime = currentTime;
-    }
-  } else if (currentPirState == LOW) {
-    digitalWrite(LED_PIN, LOW);
+  int pirValue = digitalRead(pirPin);
+
+  if (pirValue == HIGH && !motionDetected && (millis() - lastTrigger > cooldown)) {
+    motionDetected = true;
+    lastTrigger = millis();
+
+    digitalWrite(ledPin, HIGH);
+    Serial.println("[PIR] Mouvement détecté !");
+    sendTelegramMessage("🚨 Mouvement détecté !");
   }
 
-  lastPirState = currentPirState;
-  delay(100);  // Small delay for stability
+  if (pirValue == LOW && motionDetected) {
+    motionDetected = false;
+    digitalWrite(ledPin, LOW);
+    Serial.println("[PIR] Zone redevenue calme.");
+  }
+
+  delay(200);
 }
